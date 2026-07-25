@@ -1,0 +1,10 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.18.2   # verify the newest v1.18 patch tag on hub.docker.com/r/qdrant/qdrant before pinning
+    container_name: qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # REST API + the web dashboard
+      - "6334:6334"   # gRPC (faster protocol the Python client can use)
+    volumes:
+      - ./qdrant_storage:/qdrant/storage   # persists your data on disk so it survives restarts

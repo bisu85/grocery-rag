@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Qdrant data — large, local, and regenerable
+qdrant_storage/
+qdrant_snapshots/
+
+# OS / editor cruft
+.DS_Store

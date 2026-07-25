@@ -1,0 +1,21 @@
+[project]
+name = "grocery-rag"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Abhishek", email = "bisu.abhishek85@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "cohere>=7.0.8",
+    "python-dotenv>=1.2.2",
+    "qdrant-client==1.18.0",
+]
+
+[project.scripts]
+grocery-rag = "grocery_rag:main"
+
+[build-system]
+requires = ["uv_build>=0.11.25,<0.12.0"]
+build-backend = "uv_build"
