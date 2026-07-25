@@ -9,6 +9,10 @@ wheels/
 # Virtual environments
 .venv
 
+# Secrets — NEVER commit
+.env
+.env.*
+
 # Qdrant data — large, local, and regenerable
 qdrant_storage/
 qdrant_snapshots/
