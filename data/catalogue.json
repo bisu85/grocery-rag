@@ -1,0 +1,14 @@
+[
+  {"id": 1, "doc_type": "product", "text": "Paneer 200g block, fresh Indian cottage cheese", "store": "Amazing Oriental", "price": 3.49, "dietary_tags": ["vegetarian"], "cuisine": "Indian"},
+  {"id": 2, "doc_type": "product", "text": "Basmati rice 5kg, long grain aromatic", "store": "Albert Heijn", "price": 12.99, "dietary_tags": ["vegan", "gluten-free"], "cuisine": "Indian"},
+  {"id": 3, "doc_type": "product", "text": "Amul ghee 1L, clarified butter", "store": "Amazing Oriental", "price": 9.99, "dietary_tags": ["vegetarian", "gluten-free"], "cuisine": "Indian"},
+  {"id": 4, "doc_type": "product", "text": "Toor dal 1kg, split pigeon peas", "store": "Amazing Oriental", "price": 3.20, "dietary_tags": ["vegan", "gluten-free"], "cuisine": "Indian"},
+  {"id": 5, "doc_type": "product", "text": "Coconut milk 400ml can, full fat", "store": "Jumbo", "price": 1.49, "dietary_tags": ["vegan"], "cuisine": "Indian"},
+  {"id": 6, "doc_type": "product", "text": "Greek yogurt 500g, plain full fat", "store": "Albert Heijn", "price": 1.89, "dietary_tags": ["vegetarian"], "cuisine": "general"},
+  {"id": 7, "doc_type": "product", "text": "Chicken thigh fillets 1kg, boneless", "store": "Lidl", "price": 6.49, "dietary_tags": ["halal-check"], "cuisine": "general"},
+  {"id": 8, "doc_type": "product", "text": "Frozen spinach 450g, chopped", "store": "Albert Heijn", "price": 1.25, "dietary_tags": ["vegan", "gluten-free"], "cuisine": "general"},
+  {"id": 9, "doc_type": "recipe", "text": "Palak paneer: creamy spinach curry with cubes of Indian cheese", "store": null, "price": null, "dietary_tags": ["vegetarian"], "cuisine": "Indian"},
+  {"id": 10, "doc_type": "recipe", "text": "Dal tadka: yellow lentils tempered with cumin, garlic and ghee", "store": null, "price": null, "dietary_tags": ["vegetarian", "gluten-free"], "cuisine": "Indian"},
+  {"id": 11, "doc_type": "recipe", "text": "Chicken korma: mild creamy curry with yogurt and spices", "store": null, "price": null, "dietary_tags": [], "cuisine": "Indian"},
+  {"id": 12, "doc_type": "recipe", "text": "Coconut vegetable curry: quick vegan curry with mixed vegetables", "store": null, "price": null, "dietary_tags": ["vegan", "gluten-free"], "cuisine": "Indian"}
+]

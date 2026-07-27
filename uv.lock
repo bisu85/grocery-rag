@@ -180,6 +180,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "cohere" },
+    { name = "httpx" },
     { name = "python-dotenv" },
     { name = "qdrant-client" },
 ]
@@ -187,6 +188,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cohere", specifier = ">=7.0.8" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "qdrant-client", specifier = "==1.18.0" },
 ]
