@@ -60,6 +60,6 @@ def answer(question: str, k: int = 3) -> str:
     return resp.message.content[0].text
 
 if __name__ == "__main__":
-    q = "What red wine should I buy for a steak dinner?"
+    q = "What curry can I make tonight?"
     print("Q:", q, "\n")
     print("A:", answer(q))

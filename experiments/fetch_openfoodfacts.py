@@ -13,13 +13,31 @@ TERMS = [
     ("chickpeas", "Indian"),
     ("greek yogurt", "general"),
 ]
-BASE = "https://world.openfoodfacts.org/cgi/search.pl"
+BASE = "https://nl.openfoodfacts.org/cgi/search.pl"   # country instance = less hammered
 HEADERS = {"User-Agent": "grocery-rag-learning/0.1 (student learning project)"}
 PER_TERM = 5
+MAX_RETRIES = 4
+
+
+def get_with_retry(client: httpx.Client, url: str, params: dict) -> httpx.Response | None:
+    """GET with exponential backoff on transient errors (503/429/timeouts).
+
+    Returns the response, or None if it never succeeded."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            r = client.get(url, params=params)
+            if r.status_code in (429, 500, 502, 503, 504):
+                raise httpx.HTTPStatusError("transient", request=r.request, response=r)
+            r.raise_for_status()
+            return r
+        except (httpx.HTTPStatusError, httpx.TransportError) as e:
+            wait = 2 ** attempt  # 1, 2, 4, 8 seconds
+            print(f"    attempt {attempt + 1} failed ({e.__class__.__name__}); retrying in {wait}s")
+            time.sleep(wait)
+    return None
 
 
 def map_dietary(product: dict) -> list[str]:
-    """Translate OFF's label/analysis tags into our dietary_tags vocabulary."""
     tags = set()
     sources = (product.get("labels_tags") or []) + (product.get("ingredients_analysis_tags") or [])
     for t in sources:
@@ -35,7 +53,7 @@ def map_dietary(product: dict) -> list[str]:
 
 
 def main() -> None:
-    records: dict[str, dict] = {}  # keyed by barcode -> dedupes automatically
+    records: dict[str, dict] = {}
     with httpx.Client(headers=HEADERS, timeout=30) as client:
         for term, cuisine in TERMS:
             params = {
@@ -45,13 +63,16 @@ def main() -> None:
                 "json": 1,
                 "page_size": PER_TERM,
             }
-            r = client.get(BASE, params=params)
-            r.raise_for_status()
+            r = get_with_retry(client, BASE, params)
+            if r is None:
+                print(f"  '{term}': SKIPPED after {MAX_RETRIES} attempts")
+                continue
+
             products = r.json().get("products", [])
             for p in products:
                 code = p.get("code")
                 name = (p.get("product_name") or p.get("product_name_en") or "").strip()
-                if not code or not name:  # crowdsourced data: skip incomplete rows
+                if not code or not name:
                     continue
                 brand = (p.get("brands") or "").strip()
                 qty = (p.get("quantity") or "").strip()
@@ -59,13 +80,13 @@ def main() -> None:
                 records[code] = {
                     "doc_type": "product",
                     "text": text,
-                    "store": None,  # OFF has no reliable store
-                    "price": None,  # OFF has no price -> comes via a tool later
+                    "store": None,
+                    "price": None,
                     "dietary_tags": map_dietary(p),
                     "cuisine": cuisine,
                 }
             print(f"  '{term}': {len(products)} fetched")
-            time.sleep(0.5)  # be polite to a free community API
+            time.sleep(1.0)  # a bit slower between terms, to stay under the rate limit
 
     out = list(records.values())
     with open("data/products_off.json", "w") as f:
