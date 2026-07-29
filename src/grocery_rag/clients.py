@@ -1,0 +1,8 @@
+import cohere
+from qdrant_client import AsyncQdrantClient
+
+from grocery_rag.config import COHERE_API_KEY, QDRANT_URL
+
+# Created once at import, shared everywhere. Async versions (for the API).
+co = cohere.AsyncClientV2(api_key=COHERE_API_KEY)
+qdrant = AsyncQdrantClient(url=QDRANT_URL)
