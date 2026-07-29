@@ -7,8 +7,10 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from qdrant_client import AsyncQdrantClient, models
 import json
+from langfuse import observe, get_client
 
 load_dotenv()
+langfuse = get_client()   # reads LANGFUSE_* from env
 
 COLLECTION = "grocery_hybrid"
 GEN_MODEL = "command-a-03-2025"
@@ -19,6 +21,22 @@ co = cohere.AsyncClientV2(api_key=os.environ["COHERE_API_KEY"])
 qdrant = AsyncQdrantClient(url="http://localhost:6333")
 
 app = FastAPI(title="Grocery RAG Assistant")
+
+def _usage(resp) -> dict:
+    """Defensively pull token counts out of a Cohere response (attribute path varies)."""
+    u = getattr(resp, "usage", None)
+    bu = getattr(u, "billed_units", None) or getattr(u, "tokens", None) if u else None
+    if not bu:
+        return {}
+    return {"input": int(getattr(bu, "input_tokens", 0) or 0),
+            "output": int(getattr(bu, "output_tokens", 0) or 0)}
+
+@observe(as_type="generation")
+async def agent_turn(messages: list) -> object:
+    langfuse.update_current_generation(model=GEN_MODEL)
+    resp = await co.chat(model=GEN_MODEL, messages=messages, tools=TOOLS)
+    langfuse.update_current_generation(usage_details=_usage(resp))
+    return resp
 
 # ---- TOOL: volatile data (synthetic stand-in for a real price API/scraper) ----
 PRICE_DB = {
@@ -32,7 +50,7 @@ PRICE_DB = {
     "cumin": (1.79, "Jumbo"), "turmeric": (1.59, "Jumbo"),
 }
 
-
+@observe()
 async def check_price(product: str) -> dict:
     """Return the current price of a product (volatile data — lives behind a tool, not in Qdrant)."""
     key = product.strip().lower()
@@ -41,8 +59,8 @@ async def check_price(product: str) -> dict:
             return {"product": product, "price_eur": price, "store": store}
     return {"product": product, "price_eur": None, "note": "price not available"}
 
-
 # ---- TOOL: your RAG retrieval, exposed so the agent can choose to search ----
+@observe()
 async def search_products(query: str) -> dict:
     """Semantically search the grocery catalogue (hybrid + rerank)."""
     sources = await retrieve(query, k=5)   # reuses your existing pipeline
@@ -57,7 +75,7 @@ RECIPE_DB = {
     "chicken korma": ["chicken", "yogurt", "onion", "cashews", "garam masala", "cream"],
 }
 
-
+@observe()
 async def get_recipe_ingredients(dish: str) -> dict:   # add 'async'
     key = dish.strip().lower()
     return {"dish": dish, "ingredients": RECIPE_DB.get(key, [])}
@@ -114,6 +132,7 @@ class AgentResponse(BaseModel):
 
 
 # ---- the pipeline, now async ----
+@observe()
 async def embed_query(q: str) -> list[float]:
     res = await co.embed(
         texts=[q], model="embed-v4.0", input_type="search_query",
@@ -121,7 +140,7 @@ async def embed_query(q: str) -> list[float]:
     )
     return (getattr(res.embeddings, "float", None) or res.embeddings.float_)[0]
 
-
+@observe()
 async def retrieve(query: str, k: int) -> list[Source]:
     qvec = await embed_query(query)
     cands = (await qdrant.query_points(
@@ -169,7 +188,8 @@ async def run_agent(question: str) -> AgentResponse:
     captured_plan = None
 
     # 1) first call — the model may answer directly, OR ask for a tool
-    res = await co.chat(model=GEN_MODEL, messages=messages, tools=TOOLS)
+    #res = await co.chat(model=GEN_MODEL, messages=messages, tools=TOOLS)
+    res = await agent_turn(messages)
     
     # 2) loop while the model wants tools (usually one round for us)
     while res.message.tool_calls:
@@ -191,7 +211,8 @@ async def run_agent(question: str) -> AgentResponse:
                 "content": json.dumps(result),
             })
         # 4) call again — now the model can use the tool results
-        res = await co.chat(model=GEN_MODEL, messages=messages, tools=TOOLS)
+        #res = await co.chat(model=GEN_MODEL, messages=messages, tools=TOOLS)
+        res = await agent_turn(messages)
 
     return AgentResponse(
         answer=res.message.content[0].text,
