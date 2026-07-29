@@ -1,9 +1,29 @@
 from qdrant_client import models
+import asyncio
+from functools import lru_cache
 
 from grocery_rag.clients import co, qdrant
 from grocery_rag.config import (
-    CANDIDATES, COLLECTION, DEFAULT_K, EMBED_MODEL, EMBED_DIM, RERANK_MODEL,
+    CANDIDATES, COLLECTION, DEFAULT_K, EMBED_MODEL, EMBED_DIM, RERANK_MODEL, RERANK_PROVIDER, LOCAL_RERANK_MODEL
 )
+
+@lru_cache(maxsize=1)
+def _local_reranker():
+    """Load the cross-encoder once, on first use (lazy — avoids slow import at startup)."""
+    from sentence_transformers import CrossEncoder
+    return CrossEncoder(LOCAL_RERANK_MODEL, max_length=512)
+
+async def _rerank(query: str, docs: list[str], k: int) -> list[dict]:
+    if RERANK_PROVIDER == "local":
+        model = _local_reranker()
+        pairs = [(query, d) for d in docs]
+        # predict is blocking/CPU-bound → run off the event loop so the server stays responsive
+        scores = await asyncio.to_thread(model.predict, pairs)
+        ranked = sorted(zip(docs, scores), key=lambda ds: ds[1], reverse=True)[:k]
+        return [{"text": d, "score": float(s)} for d, s in ranked]
+    else:  # cohere
+        rr = await co.rerank(model=RERANK_MODEL, query=query, documents=docs, top_n=k)
+        return [{"text": docs[r.index], "score": r.relevance_score} for r in rr.results]
 
 
 async def embed_query(q: str) -> list[float]:
@@ -28,11 +48,20 @@ async def hybrid_candidates(query: str, n: int = CANDIDATES):
     )).points
 
 
+## --- Retrieve from Cohere + Qdrant: hybrid candidates -> rerank -> top-k as plain dicts ---
+# async def retrieve(query: str, k: int = DEFAULT_K) -> list[dict]:
+#     """Full retrieval: hybrid candidates -> rerank -> top-k as plain dicts."""
+#     cands = await hybrid_candidates(query)
+#     if not cands:
+#         return []
+#     docs = [c.payload["text"] for c in cands]
+#     rr = await co.rerank(model=RERANK_MODEL, query=query, documents=docs, top_n=k)
+#     return [{"text": docs[r.index], "score": r.relevance_score} for r in rr.results]
+
+# Local reranker version of retrieve.
 async def retrieve(query: str, k: int = DEFAULT_K) -> list[dict]:
-    """Full retrieval: hybrid candidates -> rerank -> top-k as plain dicts."""
     cands = await hybrid_candidates(query)
     if not cands:
         return []
     docs = [c.payload["text"] for c in cands]
-    rr = await co.rerank(model=RERANK_MODEL, query=query, documents=docs, top_n=k)
-    return [{"text": docs[r.index], "score": r.relevance_score} for r in rr.results]
+    return await _rerank(query, docs, k)

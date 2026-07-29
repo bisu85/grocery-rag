@@ -11,9 +11,17 @@ EMBED_DIM = 1024
 GEN_MODEL = "command-a-03-2025"
 RERANK_MODEL = "rerank-v4.0-fast"
 
+# --- provider toggles (escape trial caps by going local) ---
+RERANK_PROVIDER = "local"                       # "cohere" | "local"
+LOCAL_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"  # multilingual (matches Indian↔Dutch)
+
+# --- embedding provider (escape the embed cap by going local) ---
+EMBED_PROVIDER = "local"                 # "cohere" | "local"
+LOCAL_EMBED_MODEL = "bge-m3"             # Ollama, 1024-dim, multilingual
+
 # --- Qdrant ---
 QDRANT_URL = "http://localhost:6333"
-COLLECTION = "grocery_hybrid"
+COLLECTION = "grocery_hybrid_local" if EMBED_PROVIDER == "local" else "grocery_hybrid"
 
 # --- retrieval knobs ---
 CANDIDATES = 20          # how many to retrieve before reranking
