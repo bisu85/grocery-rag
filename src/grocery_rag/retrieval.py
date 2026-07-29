@@ -2,9 +2,11 @@ from qdrant_client import models
 import asyncio
 from functools import lru_cache
 
-from grocery_rag.clients import co, qdrant
+from grocery_rag.clients import co, qdrant, ollama_client
 from grocery_rag.config import (
-    CANDIDATES, COLLECTION, DEFAULT_K, EMBED_MODEL, EMBED_DIM, RERANK_MODEL, RERANK_PROVIDER, LOCAL_RERANK_MODEL
+    CANDIDATES, COLLECTION, DEFAULT_K, EMBED_MODEL, EMBED_DIM, 
+    RERANK_MODEL, RERANK_PROVIDER, LOCAL_RERANK_MODEL,
+    EMBED_PROVIDER, LOCAL_EMBED_MODEL
 )
 
 @lru_cache(maxsize=1)
@@ -26,13 +28,29 @@ async def _rerank(query: str, docs: list[str], k: int) -> list[dict]:
         return [{"text": docs[r.index], "score": r.relevance_score} for r in rr.results]
 
 
-async def embed_query(q: str) -> list[float]:
+async def embed_texts(texts: list[str], input_type: str) -> list[list[float]]:
+    """Embed a batch. input_type ('search_query'/'search_document') is Cohere-only;
+    bge-m3 doesn't use it, so we just ignore it in the local branch."""
+    if EMBED_PROVIDER == "local":
+        # Ollama's async embed; returns {'embeddings': [[...], ...]}
+        res = await ollama_client.embed(model=LOCAL_EMBED_MODEL, input=texts)
+        return res["embeddings"]
     res = await co.embed(
-        texts=[q], model=EMBED_MODEL, input_type="search_query",
+        texts=texts, model=EMBED_MODEL, input_type=input_type,
         output_dimension=EMBED_DIM, embedding_types=["float"],
     )
-    return (getattr(res.embeddings, "float", None) or res.embeddings.float_)[0]
+    return getattr(res.embeddings, "float", None) or res.embeddings.float_
 
+
+# # --- Old - Cohere embed model ---
+# async def embed_query(q: str) -> list[float]:
+#     res = await co.embed(
+#         texts=[q], model=EMBED_MODEL, input_type="search_query",
+#         output_dimension=EMBED_DIM, embedding_types=["float"],
+#     )
+#     return (getattr(res.embeddings, "float", None) or res.embeddings.float_)[0]
+async def embed_query(q: str) -> list[float]:
+    return (await embed_texts([q], "search_query"))[0]
 
 async def hybrid_candidates(query: str, n: int = CANDIDATES):
     qvec = await embed_query(query)
@@ -58,7 +76,7 @@ async def hybrid_candidates(query: str, n: int = CANDIDATES):
 #     rr = await co.rerank(model=RERANK_MODEL, query=query, documents=docs, top_n=k)
 #     return [{"text": docs[r.index], "score": r.relevance_score} for r in rr.results]
 
-# Local reranker version of retrieve.
+# --- Local reranker version of retrieve.
 async def retrieve(query: str, k: int = DEFAULT_K) -> list[dict]:
     cands = await hybrid_candidates(query)
     if not cands:
