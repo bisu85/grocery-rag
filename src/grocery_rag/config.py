@@ -39,4 +39,7 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"   # cheap, fast, strong at tool use
 
 # --- chat / agent brain provider ---
-CHAT_PROVIDER = "anthropic"   # "cohere" | "anthropic"
+CHAT_PROVIDER = "cohere"   # "cohere" | "anthropic"
+
+MAX_AGENT_STEPS = 6         # cap on model round-trips (serial reasoning depth)
+MAX_AGENT_TOOL_CALLS = 10   # cap on TOTAL tool executions, summed across all rounds (fan-out work)
