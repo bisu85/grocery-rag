@@ -32,3 +32,11 @@ DEFAULT_K = 4            # how many to keep after rerank
 # cutoff) — so locally we disable the threshold and rely on ranking + the LLM's
 # grounding prompt to reject junk.
 RELEVANCE_THRESHOLD = 0.0 if RERANK_PROVIDER == "local" else 0.30
+
+
+# --- Anthropic (Claude) ---
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"   # cheap, fast, strong at tool use
+
+# --- chat / agent brain provider ---
+CHAT_PROVIDER = "anthropic"   # "cohere" | "anthropic"
