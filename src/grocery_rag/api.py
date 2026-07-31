@@ -40,6 +40,7 @@ class AgentResponse(BaseModel):
     steps: int = 0
     tool_calls: int = 0
     stopped_on: str = "completed"   # "completed" | "step_budget" | "tool_budget"
+    plan_adherence: dict | None = None
 
 
 @app.get("/")

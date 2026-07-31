@@ -61,28 +61,53 @@ async def _run_agent_cohere(question: str) -> dict:
         "stopped_on": "unbudgeted",   # honest: real counts, but NO leash enforces limits here
     }
 
+PLAN_TOOL = [{
+    "name": "submit_plan",
+    "description": "Record your step-by-step plan. One entry per tool call you intend to make.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "tool": {"type": "string",
+                                 "enum": ["get_recipe_ingredients", "search_products", "check_prices"],
+                                 "description": "Which tool this step uses."},
+                        "reason": {"type": "string", "description": "Why this step is needed."},
+                    },
+                    "required": ["tool", "reason"],
+                },
+            },
+        },
+        "required": ["steps"],
+    },
+}]
+
 PLANNER = (
-    "You are the planner for a grocery/cooking assistant. Given the user's question and the "
-    "available tools — get_recipe_ingredients, search_products, check_prices — write a short "
-    "numbered plan (1–4 steps) naming which tool(s) you'll use, in what order, and why. "
-    "Plan ONLY. Do not call any tools. Keep it to a few lines."
+    "You are the planner for a grocery/cooking assistant. Given the question and the tools "
+    "get_recipe_ingredients, search_products, check_prices, decide the minimal ordered set of "
+    "tool calls to answer it, and record them via submit_plan. Plan only — do not answer."
 )
 
-async def _make_plan(question: str) -> str:
+async def _make_plan(question: str) -> tuple[list[dict], str]:
     with langfuse.start_as_current_observation(
         as_type="generation", name="plan", model=CLAUDE_MODEL
     ) as gen:
         res = await anthropic_client.messages.create(
-            model=CLAUDE_MODEL, max_tokens=300, system=PLANNER,
+            model=CLAUDE_MODEL, max_tokens=400, system=PLANNER,
+            tools=PLAN_TOOL,
+            tool_choice={"type": "tool", "name": "submit_plan"},
             messages=[{"role": "user", "content": question}],
         )
-        plan_text = "".join(b.text for b in res.content if b.type == "text")
-        gen.update(
-            input=question,
-            output=plan_text,
-            usage_details={"input": res.usage.input_tokens, "output": res.usage.output_tokens},
-        )
-    return plan_text
+        block = next(b for b in res.content if b.type == "tool_use")
+        steps = block.input["steps"]
+        plan_text = "\n".join(f"{i}. {s['tool']} — {s['reason']}" for i, s in enumerate(steps, 1))
+        gen.update(input=question, output=steps,
+                   usage_details={"input": res.usage.input_tokens,
+                                  "output": res.usage.output_tokens})
+    return steps, plan_text
 
 
 REFLECTOR = (
@@ -111,9 +136,9 @@ async def _reflect(question: str, answer: str) -> str | None:
 
 
 async def _run_agent_anthropic(question: str) -> dict:
-    plan = await _make_plan(question)
+    plan_steps, plan_text = await _make_plan(question)     
     exec_system = (
-        SYSTEM + "\n\nYou have already made this plan:\n" + plan +
+        SYSTEM + "\n\nYou have already made this plan:\n" + plan_text +
         "\nFollow it, calling the tools as needed, then give the final answer."
     )
 
@@ -122,6 +147,11 @@ async def _run_agent_anthropic(question: str) -> dict:
     steps = 0
     tool_calls = 0
     stopped_on = "completed"
+
+    WRAP_UP = (
+    " You have run out of tool budget. Do not request more tools. Answer as fully as "
+    "you can from the information already gathered, and clearly state anything you could not determine."
+    )
 
     async def ask(tool_choice=None, system=exec_system):
         kwargs = dict(model=CLAUDE_MODEL, max_tokens=1024, system=system,
@@ -191,16 +221,26 @@ async def _run_agent_anthropic(question: str) -> dict:
                                     f"Fix it (use tools if needed) and give the corrected final answer."})
         answer = await execute()                      # revise — same budgets keep accruing
 
+    # (b) after the reflection loop, before the return dict:
+    planned = [s["tool"] for s in plan_steps]
+    plan_adherence = {
+        "planned": planned,
+        "used": tools_used,
+        "skipped": sorted(set(planned) - set(tools_used)),
+        "unplanned": sorted(set(tools_used) - set(planned)),
+    }
+    langfuse.update_current_span(metadata={"plan_adherence": plan_adherence})   # note: update_current_span (your v4 fix)
+
+
     # after reflection loop, before building the return dict:
     if stopped_on == "completed" and (tool_calls >= MAX_AGENT_TOOL_CALLS or steps >= MAX_AGENT_STEPS):
         stopped_on = "budget_reached"   # finished, but pressed against the wall — not truly clean
 
     return {
         "answer": answer,
-        "tool_plan": plan,
+        "tool_plan": plan_text,
+        "plan_adherence": plan_adherence,                  # (c) new key
         "tools_used": tools_used,
-        "steps": steps,
-        "tool_calls": tool_calls,
-        "stopped_on": stopped_on,
-        "reflections": reflections,
+        "steps": steps, "tool_calls": tool_calls,
+        "stopped_on": stopped_on, "reflections": reflections,
     }
