@@ -6,7 +6,16 @@ from grocery_rag.config import DEFAULT_K
 from grocery_rag.generation import generate
 from grocery_rag.retrieval import retrieve
 
-app = FastAPI(title="Grocery RAG Assistant")
+from contextlib import asynccontextmanager
+from grocery_rag.clients import langfuse
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    langfuse.shutdown()
+
+app = FastAPI(title="Grocery RAG Assistant", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):

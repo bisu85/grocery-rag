@@ -1,8 +1,9 @@
 import json
 
-from grocery_rag.clients import co, anthropic_client
+from grocery_rag.clients import co, anthropic_client, langfuse
 from grocery_rag.config import GEN_MODEL, CLAUDE_MODEL, CHAT_PROVIDER, MAX_AGENT_STEPS, MAX_AGENT_TOOL_CALLS
 from grocery_rag.tools import TOOL_FUNCTIONS, TOOLS, ANTHROPIC_TOOLS
+from langfuse import observe
 
 SYSTEM = (
     "You are a cooking and grocery assistant for an Indian foodie in the Netherlands. "
@@ -11,7 +12,7 @@ SYSTEM = (
     "Answer concisely."
 )
 
-
+@observe(name="grocery-agent")
 async def run_agent(question: str) -> dict:
     if CHAT_PROVIDER == "anthropic":
         return await _run_agent_anthropic(question)
@@ -70,17 +71,25 @@ async def _run_agent_anthropic(question: str) -> dict:
     "you can from the information already gathered, and clearly state anything you could not determine."
     )
 
-    async def ask(tool_choice=None, system=SYSTEM):          # ← add system param
+    async def ask(tool_choice=None, system=SYSTEM):
         kwargs = dict(
             model=CLAUDE_MODEL,
             max_tokens=1024,
             system=system,
-            tools=ANTHROPIC_TOOLS, 
+            tools=ANTHROPIC_TOOLS,
             messages=messages,
             )
         if tool_choice is not None:
             kwargs["tool_choice"] = tool_choice
-        return await anthropic_client.messages.create(**kwargs)
+        with langfuse.start_as_current_observation(
+            as_type="generation", name="claude", model=CLAUDE_MODEL
+        ) as gen:
+            res = await anthropic_client.messages.create(**kwargs)
+            gen.update(usage_details={                       # provider-reported tokens → cost
+                "input": res.usage.input_tokens,
+                "output": res.usage.output_tokens,
+            })
+        return res
 
     res = await ask()
     while res.stop_reason == "tool_use":

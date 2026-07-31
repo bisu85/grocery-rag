@@ -1,4 +1,5 @@
 from grocery_rag.retrieval import retrieve
+from langfuse import observe
 
 # ---- tool backends (synthetic stand-ins; swap for real sources later) ----
 RECIPE_DB = {
@@ -18,7 +19,7 @@ PRICE_DB = {
     "cumin": (1.79, "Jumbo"), "turmeric": (1.59, "Jumbo"),
 }
 
-
+@observe()
 async def get_recipe_ingredients(dish: str) -> dict:
     return {"dish": dish, "ingredients": RECIPE_DB.get(dish.strip().lower(), [])}
 
@@ -31,11 +32,11 @@ def _lookup_price(product: str) -> dict:
             return {"product": product, "price_eur": price, "store": store}
     return {"product": product, "price_eur": None, "note": "price not available"}
 
-
+@observe()
 async def check_prices(products: list[str]) -> dict:
     return {"results": [_lookup_price(p) for p in products]}
 
-
+@observe()
 async def search_products(query: str) -> dict:
     results = await retrieve(query, k=5)          # reuses the ONE real retrieval
     return {"query": query, "results": [r["text"] for r in results]}
