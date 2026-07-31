@@ -1,21 +1,25 @@
 import json
 
 from grocery_rag.clients import co, anthropic_client, langfuse
-from grocery_rag.config import GEN_MODEL, CLAUDE_MODEL, CHAT_PROVIDER, MAX_AGENT_STEPS, MAX_AGENT_TOOL_CALLS
+from grocery_rag.config import GEN_MODEL, CLAUDE_MODEL, CHAT_PROVIDER, MAX_AGENT_STEPS, MAX_AGENT_TOOL_CALLS, MAX_REFLECTIONS
 from grocery_rag.tools import TOOL_FUNCTIONS, TOOLS, ANTHROPIC_TOOLS
 from langfuse import observe
 
 SYSTEM = (
     "You are a cooking and grocery assistant for an Indian foodie in the Netherlands. "
-    "You have tools to look up recipe ingredients, search the product catalogue, and "
-    "check prices. Use whatever tools help — you may use several to fully answer. "
-    "Answer concisely."
+    "You have tools to look up recipe ingredients, search the catalogue, and check prices. "
+    "Use ONLY information returned by the tools. Never invent prices, quantities, package "
+    "sizes, weights, or totals. If a price is missing, say so explicitly and exclude it from "
+    "any total. If you cannot answer from tool results, say what you don't have. "
+    "Do not estimate or use outside knowledge. Answer concisely."
 )
 
 @observe(name="grocery-agent")
 async def run_agent(question: str) -> dict:
     if CHAT_PROVIDER == "anthropic":
-        return await _run_agent_anthropic(question)
+        result = await _run_agent_anthropic(question)
+        langfuse.update_current_span(input={"question": question}, output={"answer": result["answer"]})
+        return result
     return await _run_agent_cohere(question)
 
 
@@ -57,99 +61,146 @@ async def _run_agent_cohere(question: str) -> dict:
         "stopped_on": "unbudgeted",   # honest: real counts, but NO leash enforces limits here
     }
 
+PLANNER = (
+    "You are the planner for a grocery/cooking assistant. Given the user's question and the "
+    "available tools — get_recipe_ingredients, search_products, check_prices — write a short "
+    "numbered plan (1–4 steps) naming which tool(s) you'll use, in what order, and why. "
+    "Plan ONLY. Do not call any tools. Keep it to a few lines."
+)
+
+async def _make_plan(question: str) -> str:
+    with langfuse.start_as_current_observation(
+        as_type="generation", name="plan", model=CLAUDE_MODEL
+    ) as gen:
+        res = await anthropic_client.messages.create(
+            model=CLAUDE_MODEL, max_tokens=300, system=PLANNER,
+            messages=[{"role": "user", "content": question}],
+        )
+        plan_text = "".join(b.text for b in res.content if b.type == "text")
+        gen.update(
+            input=question,
+            output=plan_text,
+            usage_details={"input": res.usage.input_tokens, "output": res.usage.output_tokens},
+        )
+    return plan_text
+
+
+REFLECTOR = (
+    "You are a strict reviewer of an assistant's answer to a grocery/cooking question. "
+    "Judge whether the answer is fully supported BY THE TOOL RESULTS provided. "
+    "Reply 'OK' if it is. Otherwise reply with ONE short sentence naming the single most important "
+    "gap or unsupported claim to fix. Never reward adding information the tools did not return."
+)
+
+async def _reflect(question: str, answer: str) -> str | None:
+    prompt = f"Question: {question}\n\nAnswer:\n{answer}"
+    with langfuse.start_as_current_observation(
+        as_type="generation", name="reflect", model=CLAUDE_MODEL
+    ) as gen:
+        res = await anthropic_client.messages.create(
+            model=CLAUDE_MODEL, max_tokens=150, system=REFLECTOR,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        verdict = "".join(b.text for b in res.content if b.type == "text").strip()
+        gen.update(
+            input=prompt,
+            output=verdict,
+            usage_details={"input": res.usage.input_tokens, "output": res.usage.output_tokens},
+        )
+    return None if verdict.upper().startswith("OK") else verdict
+
 
 async def _run_agent_anthropic(question: str) -> dict:
-    messages = [{"role": "user", "content": question}]
-    tools_used: list[str] = []
-    captured_plan = None
-    steps = 0          # model round-trips (serial depth)
-    tool_calls = 0     # total tool executions, incl. parallel ones inside a round (fan-out)
-    stopped_on = "completed"
-
-    WRAP_UP = (
-    " You have run out of tool budget. Do not request more tools. Answer as fully as "
-    "you can from the information already gathered, and clearly state anything you could not determine."
+    plan = await _make_plan(question)
+    exec_system = (
+        SYSTEM + "\n\nYou have already made this plan:\n" + plan +
+        "\nFollow it, calling the tools as needed, then give the final answer."
     )
 
-    async def ask(tool_choice=None, system=SYSTEM):
-        kwargs = dict(
-            model=CLAUDE_MODEL,
-            max_tokens=1024,
-            system=system,
-            tools=ANTHROPIC_TOOLS,
-            messages=messages,
-            )
+    messages = [{"role": "user", "content": question}]
+    tools_used: list[str] = []
+    steps = 0
+    tool_calls = 0
+    stopped_on = "completed"
+
+    async def ask(tool_choice=None, system=exec_system):
+        kwargs = dict(model=CLAUDE_MODEL, max_tokens=1024, system=system,
+                      tools=ANTHROPIC_TOOLS, messages=messages)
         if tool_choice is not None:
             kwargs["tool_choice"] = tool_choice
         with langfuse.start_as_current_observation(
             as_type="generation", name="claude", model=CLAUDE_MODEL
         ) as gen:
             res = await anthropic_client.messages.create(**kwargs)
-            gen.update(usage_details={                       # provider-reported tokens → cost
-                "input": res.usage.input_tokens,
-                "output": res.usage.output_tokens,
-            })
+            gen.update(
+                input=list(messages),                          # what went in (snapshot)
+                output=[b.model_dump() for b in res.content],  # what came back
+                usage_details={"input": res.usage.input_tokens,
+                               "output": res.usage.output_tokens},
+            )
         return res
 
-    res = await ask()
-    while res.stop_reason == "tool_use":
-        # ── the leashes: check BEFORE another round ──
-        if steps >= MAX_AGENT_STEPS:
-            stopped_on = "step_budget"
-            res = await ask(tool_choice={"type": "none"}, system=SYSTEM + WRAP_UP)   # ← nudge
-            break
-        if tool_calls >= MAX_AGENT_TOOL_CALLS:
-            stopped_on = "tool_budget"
-            res = await ask(tool_choice={"type": "none"}, system=SYSTEM + WRAP_UP)   # ← nudge
-            break
-        steps += 1
-
-        plan = next((b.text for b in res.content if b.type == "text"), None)
-        if plan:
-            captured_plan = plan
-
-        messages.append({"role": "assistant", "content": res.content})
-
-        tool_results = []                                   # ALL results in ONE user message
-        for block in res.content:
-            if block.type != "tool_use":
-                continue
-
-            if tool_calls >= MAX_AGENT_TOOL_CALLS:
-                # over budget mid-round: the API still requires a result for THIS block,
-                # so fabricate an error result instead of executing the tool.
-                stopped_on = "tool_budget"
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": "Skipped: tool-call budget (MAX_AGENT_TOOL_CALLS) exhausted. Do not retry.",
-                    "is_error": True,
-                })
-                continue
-
-            tool_calls += 1
-            tools_used.append(block.name)
-            try:
-                result = await TOOL_FUNCTIONS[block.name](**block.input)
-                content, is_error = json.dumps(result), False
-            except Exception as e:
-                content, is_error = f"Tool '{block.name}' failed: {e}", True
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": content,
-                "is_error": is_error,
-            })
-
-        messages.append({"role": "user", "content": tool_results})
+    async def execute() -> str:                       # runs messages to a final answer
+        nonlocal steps, tool_calls, stopped_on
         res = await ask()
+        while res.stop_reason == "tool_use":
+            if steps >= MAX_AGENT_STEPS:
+                stopped_on = "step_budget"
+                res = await ask(tool_choice={"type": "none"}, system=exec_system + WRAP_UP)
+                break
+            if tool_calls >= MAX_AGENT_TOOL_CALLS:
+                stopped_on = "tool_budget"
+                res = await ask(tool_choice={"type": "none"}, system=exec_system + WRAP_UP)
+                break
+            steps += 1
+            messages.append({"role": "assistant", "content": res.content})
+            tool_results = []
+            for block in res.content:
+                if block.type != "tool_use":
+                    continue
+                if tool_calls >= MAX_AGENT_TOOL_CALLS:
+                    stopped_on = "tool_budget"
+                    tool_results.append({"type": "tool_result", "tool_use_id": block.id,
+                                         "content": "Skipped: tool-call budget exhausted. Do not retry.",
+                                         "is_error": True})
+                    continue
+                tool_calls += 1
+                tools_used.append(block.name)
+                try:
+                    result = await TOOL_FUNCTIONS[block.name](**block.input)
+                    content, is_error = json.dumps(result), False
+                except Exception as e:
+                    content, is_error = f"Tool '{block.name}' failed: {e}", True
+                tool_results.append({"type": "tool_result", "tool_use_id": block.id,
+                                     "content": content, "is_error": is_error})
+            messages.append({"role": "user", "content": tool_results})
+            res = await ask()
+        messages.append({"role": "assistant", "content": res.content})   # ← keep history valid for reflection
+        return "".join(b.text for b in res.content if b.type == "text")
 
-    answer = "".join(b.text for b in res.content if b.type == "text")
+    answer = await execute()                          # ── first pass ──
+
+    reflections = 0                                   # ── REFLECT phase (bounded) ──
+    while reflections < MAX_REFLECTIONS:
+        critique = await _reflect(question, answer)
+        if critique is None:                          # critic said OK
+            break
+        reflections += 1
+        messages.append({"role": "user",
+                         "content": f"A reviewer flagged an issue: {critique}\n"
+                                    f"Fix it (use tools if needed) and give the corrected final answer."})
+        answer = await execute()                      # revise — same budgets keep accruing
+
+    # after reflection loop, before building the return dict:
+    if stopped_on == "completed" and (tool_calls >= MAX_AGENT_TOOL_CALLS or steps >= MAX_AGENT_STEPS):
+        stopped_on = "budget_reached"   # finished, but pressed against the wall — not truly clean
+
     return {
         "answer": answer,
-        "tool_plan": captured_plan,
+        "tool_plan": plan,
         "tools_used": tools_used,
         "steps": steps,
         "tool_calls": tool_calls,
         "stopped_on": stopped_on,
+        "reflections": reflections,
     }

@@ -43,3 +43,5 @@ CHAT_PROVIDER = "anthropic"   # "cohere" | "anthropic"
 
 MAX_AGENT_STEPS = 6         # cap on model round-trips (serial reasoning depth)
 MAX_AGENT_TOOL_CALLS = 10   # cap on TOTAL tool executions, summed across all rounds (fan-out work)
+
+MAX_REFLECTIONS = 1   # bounded self-critique passes (reflection has its own leash)
