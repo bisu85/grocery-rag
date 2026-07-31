@@ -65,14 +65,19 @@ async def _run_agent_anthropic(question: str) -> dict:
     tool_calls = 0     # total tool executions, incl. parallel ones inside a round (fan-out)
     stopped_on = "completed"
 
-    async def ask(tool_choice=None):
+    WRAP_UP = (
+    " You have run out of tool budget. Do not request more tools. Answer as fully as "
+    "you can from the information already gathered, and clearly state anything you could not determine."
+    )
+
+    async def ask(tool_choice=None, system=SYSTEM):          # ← add system param
         kwargs = dict(
             model=CLAUDE_MODEL,
             max_tokens=1024,
-            system=SYSTEM,
-            tools=ANTHROPIC_TOOLS,        # keep tools in the request even when forbidding them
+            system=system,
+            tools=ANTHROPIC_TOOLS, 
             messages=messages,
-        )
+            )
         if tool_choice is not None:
             kwargs["tool_choice"] = tool_choice
         return await anthropic_client.messages.create(**kwargs)
@@ -82,11 +87,11 @@ async def _run_agent_anthropic(question: str) -> dict:
         # ── the leashes: check BEFORE another round ──
         if steps >= MAX_AGENT_STEPS:
             stopped_on = "step_budget"
-            res = await ask(tool_choice={"type": "none"})   # force a text answer
+            res = await ask(tool_choice={"type": "none"}, system=SYSTEM + WRAP_UP)   # ← nudge
             break
         if tool_calls >= MAX_AGENT_TOOL_CALLS:
             stopped_on = "tool_budget"
-            res = await ask(tool_choice={"type": "none"})
+            res = await ask(tool_choice={"type": "none"}, system=SYSTEM + WRAP_UP)   # ← nudge
             break
         steps += 1
 
