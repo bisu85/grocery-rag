@@ -45,3 +45,8 @@ MAX_AGENT_STEPS = 6         # cap on model round-trips (serial reasoning depth)
 MAX_AGENT_TOOL_CALLS = 10   # cap on TOTAL tool executions, summed across all rounds (fan-out work)
 
 MAX_REFLECTIONS = 1   # bounded self-critique passes (reflection has its own leash)
+
+# --- memory ---
+SESSION_DB = "sessions.db"            # durable short-term session history (SQLite)
+MEMORY_COLLECTION = "grocery_memory"  # long-term semantic fact memory (Qdrant)
+MEMORY_TOP_K = 3                      # how many recalled facts to inject

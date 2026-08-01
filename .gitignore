@@ -19,3 +19,5 @@ qdrant_snapshots/
 
 # OS / editor cruft
 .DS_Store
+
+sessions.db

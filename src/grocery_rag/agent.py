@@ -3,6 +3,7 @@ from contextlib import nullcontext
 from grocery_rag.clients import co, anthropic_client, langfuse
 from grocery_rag.config import GEN_MODEL, CLAUDE_MODEL, CHAT_PROVIDER, MAX_AGENT_STEPS, MAX_AGENT_TOOL_CALLS, MAX_REFLECTIONS
 from grocery_rag.tools import TOOL_FUNCTIONS, TOOLS, ANTHROPIC_TOOLS
+from grocery_rag.memory import recall_facts, remember_facts, extract_facts
 from langfuse import observe, propagate_attributes   # add propagate_attributes
 
 SYSTEM = (
@@ -16,15 +17,24 @@ SYSTEM = (
 
 @observe(name="grocery-agent")
 async def run_agent(question: str, history: list[dict] | None = None,
-                    session_id: str | None = None) -> dict:
+                    session_id: str | None = None, user_id: str | None = None) -> dict:
     history = history or []
     ctx = propagate_attributes(session_id=session_id) if session_id else nullcontext()
-    with ctx:                                          # tags this trace + all children with the session
+    with ctx:
+        recalled = await recall_facts(user_id, question) if user_id else []          # READ path
+        memory_context = ("\n\nKnown facts about this user (respect these):\n" +
+                          "\n".join(f"- {f}" for f in recalled)) if recalled else "" # tags this trace + all children with the session
         if CHAT_PROVIDER == "anthropic":
-            result = await _run_agent_anthropic(question, history)
+            result = await _run_agent_anthropic(question, history, memory_context)
+            saved = await extract_facts(question) if user_id else []                      # WRITE path
+            if saved:
+                await remember_facts(user_id, saved)
+
+            result["facts_recalled"] = recalled
+            result["facts_saved"] = saved
             langfuse.update_current_span(input={"question": question}, output={"answer": result["answer"]})
             return result
-        return await _run_agent_cohere(question, history)
+        return await _run_agent_cohere(question, history, memory_context)
 
 
 async def _run_agent_cohere(question: str) -> dict:
@@ -139,13 +149,13 @@ async def _reflect(question: str, answer: str) -> str | None:
     return None if verdict.upper().startswith("OK") else verdict
 
 
-async def _run_agent_anthropic(question: str, history: list[dict]) -> dict:
-    plan_steps, plan_text = await _make_plan(question, history)     
+async def _run_agent_anthropic(question: str, history: list[dict], memory_context: str = "") -> dict:
+    plan_steps, plan_text = await _make_plan(question, history)
     exec_system = (
-        SYSTEM + "\n\nYou have already made this plan:\n" + plan_text +
+        SYSTEM + memory_context +                                   # ← recalled facts steer the answer
+        "\n\nYou have already made this plan:\n" + plan_text +
         "\nFollow it, calling the tools as needed, then give the final answer."
     )
-
     messages = history + [{"role": "user", "content": question}]
     tools_used: list[str] = []
     steps = 0

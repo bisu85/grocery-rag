@@ -23,6 +23,7 @@ class AskRequest(BaseModel):
     question: str
     k: int = DEFAULT_K
     session_id: str | None = None            # ← optional; omit it = old stateless behaviour
+    user_id: str | None = None
 
 
 class Source(BaseModel):
@@ -43,6 +44,8 @@ class AgentResponse(BaseModel):
     tool_calls: int = 0
     stopped_on: str = "completed"   # "completed" | "step_budget" | "tool_budget"
     plan_adherence: dict | None = None
+    facts_recalled: list[str] = []
+    facts_saved: list[str] = []
 
 
 @app.get("/")
@@ -64,8 +67,8 @@ async def ask(req: AskRequest) -> AskResponse:
 
 @app.post("/ask_agent", response_model=AgentResponse)
 async def ask_agent(req: AskRequest) -> AgentResponse:
-    history = get_history(req.session_id) if req.session_id else []
-    result = await run_agent(req.question, history, req.session_id)
+    history = await get_history(req.session_id) if req.session_id else []
+    result = await run_agent(req.question, history, req.session_id, req.user_id)
     if req.session_id:
-        append_turn(req.session_id, req.question, result["answer"])
+        await append_turn(req.session_id, req.question, result["answer"])
     return AgentResponse(**result)
