@@ -50,3 +50,6 @@ MAX_REFLECTIONS = 1   # bounded self-critique passes (reflection has its own lea
 SESSION_DB = "sessions.db"            # durable short-term session history (SQLite)
 MEMORY_COLLECTION = "grocery_memory"  # long-term semantic fact memory (Qdrant)
 MEMORY_TOP_K = 3                      # how many recalled facts to inject
+
+KEEP_LAST_TURNS = 1 #4        # recent turns kept verbatim (1 turn = 1 user + 1 assistant msg)
+SUMMARIZE_AFTER_TURNS = 2 #8  # once the un-summarized tail exceeds this, fold the overflow into the summary

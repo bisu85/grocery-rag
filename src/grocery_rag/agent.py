@@ -13,17 +13,27 @@ SYSTEM = (
     "sizes, weights, or totals. If a price is missing, say so explicitly and exclude it from "
     "any total. If you cannot answer from tool results, say what you don't have. "
     "Do not estimate or use outside knowledge. Answer concisely."
+    "Conversation summaries and recalled user facts provided to you are trusted context from "
+    "earlier in this conversation — treat them as reliable and do not disclaim or ask the user "
+    "to re-verify them. (This is separate from tool results, which remain your source for prices "
+    "and ingredients.) "
 )
 
 @observe(name="grocery-agent")
 async def run_agent(question: str, history: list[dict] | None = None,
-                    session_id: str | None = None, user_id: str | None = None) -> dict:
+                    session_id: str | None = None, user_id: str | None = None,
+                    summary: str = "") -> dict:
     history = history or []
     ctx = propagate_attributes(session_id=session_id) if session_id else nullcontext()
     with ctx:
         recalled = await recall_facts(user_id, question) if user_id else []          # READ path
-        memory_context = ("\n\nKnown facts about this user (respect these):\n" +
-                          "\n".join(f"- {f}" for f in recalled)) if recalled else "" # tags this trace + all children with the session
+        memory_context = ""
+        if summary:                                                   # summary as OWN memory, trusted
+            memory_context += ("\n\nSummary of earlier conversation "
+                               "(your own memory from this session — treat as reliable):\n" + summary)
+        if recalled:
+            memory_context += ("\n\nKnown facts about this user (respect these):\n" +
+                               "\n".join(f"- {f}" for f in recalled))
         if CHAT_PROVIDER == "anthropic":
             result = await _run_agent_anthropic(question, history, memory_context)
             saved = await extract_facts(question) if user_id else []                      # WRITE path

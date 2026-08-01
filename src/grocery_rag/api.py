@@ -8,7 +8,7 @@ from grocery_rag.retrieval import retrieve
 
 from contextlib import asynccontextmanager
 from grocery_rag.clients import langfuse
-from grocery_rag.memory import get_history, append_turn
+from grocery_rag.memory import build_context, append_turn
 
 
 @asynccontextmanager
@@ -67,8 +67,11 @@ async def ask(req: AskRequest) -> AskResponse:
 
 @app.post("/ask_agent", response_model=AgentResponse)
 async def ask_agent(req: AskRequest) -> AgentResponse:
-    history = await get_history(req.session_id) if req.session_id else []
-    result = await run_agent(req.question, history, req.session_id, req.user_id)
+    if req.session_id:
+        summary, history = await build_context(req.session_id)   # now returns (summary, recent_turns)
+    else:
+        summary, history = "", []
+    result = await run_agent(req.question, history, req.session_id, req.user_id, summary)
     if req.session_id:
         await append_turn(req.session_id, req.question, result["answer"])
     return AgentResponse(**result)
