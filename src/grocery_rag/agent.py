@@ -1,9 +1,9 @@
 import json
-
+from contextlib import nullcontext
 from grocery_rag.clients import co, anthropic_client, langfuse
 from grocery_rag.config import GEN_MODEL, CLAUDE_MODEL, CHAT_PROVIDER, MAX_AGENT_STEPS, MAX_AGENT_TOOL_CALLS, MAX_REFLECTIONS
 from grocery_rag.tools import TOOL_FUNCTIONS, TOOLS, ANTHROPIC_TOOLS
-from langfuse import observe
+from langfuse import observe, propagate_attributes   # add propagate_attributes
 
 SYSTEM = (
     "You are a cooking and grocery assistant for an Indian foodie in the Netherlands. "
@@ -15,12 +15,16 @@ SYSTEM = (
 )
 
 @observe(name="grocery-agent")
-async def run_agent(question: str) -> dict:
-    if CHAT_PROVIDER == "anthropic":
-        result = await _run_agent_anthropic(question)
-        langfuse.update_current_span(input={"question": question}, output={"answer": result["answer"]})
-        return result
-    return await _run_agent_cohere(question)
+async def run_agent(question: str, history: list[dict] | None = None,
+                    session_id: str | None = None) -> dict:
+    history = history or []
+    ctx = propagate_attributes(session_id=session_id) if session_id else nullcontext()
+    with ctx:                                          # tags this trace + all children with the session
+        if CHAT_PROVIDER == "anthropic":
+            result = await _run_agent_anthropic(question, history)
+            langfuse.update_current_span(input={"question": question}, output={"answer": result["answer"]})
+            return result
+        return await _run_agent_cohere(question, history)
 
 
 async def _run_agent_cohere(question: str) -> dict:
@@ -91,7 +95,7 @@ PLANNER = (
     "tool calls to answer it, and record them via submit_plan. Plan only — do not answer."
 )
 
-async def _make_plan(question: str) -> tuple[list[dict], str]:
+async def _make_plan(question: str, history: list[dict]) -> tuple[list[dict], str]:
     with langfuse.start_as_current_observation(
         as_type="generation", name="plan", model=CLAUDE_MODEL
     ) as gen:
@@ -99,7 +103,7 @@ async def _make_plan(question: str) -> tuple[list[dict], str]:
             model=CLAUDE_MODEL, max_tokens=400, system=PLANNER,
             tools=PLAN_TOOL,
             tool_choice={"type": "tool", "name": "submit_plan"},
-            messages=[{"role": "user", "content": question}],
+            messages=history + [{"role": "user", "content": question}],
         )
         block = next(b for b in res.content if b.type == "tool_use")
         steps = block.input["steps"]
@@ -135,14 +139,14 @@ async def _reflect(question: str, answer: str) -> str | None:
     return None if verdict.upper().startswith("OK") else verdict
 
 
-async def _run_agent_anthropic(question: str) -> dict:
-    plan_steps, plan_text = await _make_plan(question)     
+async def _run_agent_anthropic(question: str, history: list[dict]) -> dict:
+    plan_steps, plan_text = await _make_plan(question, history)     
     exec_system = (
         SYSTEM + "\n\nYou have already made this plan:\n" + plan_text +
         "\nFollow it, calling the tools as needed, then give the final answer."
     )
 
-    messages = [{"role": "user", "content": question}]
+    messages = history + [{"role": "user", "content": question}]
     tools_used: list[str] = []
     steps = 0
     tool_calls = 0

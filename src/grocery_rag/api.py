@@ -8,6 +8,7 @@ from grocery_rag.retrieval import retrieve
 
 from contextlib import asynccontextmanager
 from grocery_rag.clients import langfuse
+from grocery_rag.memory import get_history, append_turn
 
 
 @asynccontextmanager
@@ -21,6 +22,7 @@ app = FastAPI(title="Grocery RAG Assistant", lifespan=lifespan)
 class AskRequest(BaseModel):
     question: str
     k: int = DEFAULT_K
+    session_id: str | None = None            # ← optional; omit it = old stateless behaviour
 
 
 class Source(BaseModel):
@@ -62,4 +64,8 @@ async def ask(req: AskRequest) -> AskResponse:
 
 @app.post("/ask_agent", response_model=AgentResponse)
 async def ask_agent(req: AskRequest) -> AgentResponse:
-    return AgentResponse(**await run_agent(req.question))
+    history = get_history(req.session_id) if req.session_id else []
+    result = await run_agent(req.question, history, req.session_id)
+    if req.session_id:
+        append_turn(req.session_id, req.question, result["answer"])
+    return AgentResponse(**result)
