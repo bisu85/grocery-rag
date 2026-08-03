@@ -9,14 +9,13 @@ from langfuse import observe, propagate_attributes   # add propagate_attributes
 SYSTEM = (
     "You are a cooking and grocery assistant for an Indian foodie in the Netherlands. "
     "You have tools to look up recipe ingredients, search the catalogue, and check prices. "
-    "Use ONLY information returned by the tools. Never invent prices, quantities, package "
-    "sizes, weights, or totals. If a price is missing, say so explicitly and exclude it from "
-    "any total. If you cannot answer from tool results, say what you don't have. "
-    "Do not estimate or use outside knowledge. Answer concisely."
-    "Conversation summaries and recalled user facts provided to you are trusted context from "
-    "earlier in this conversation — treat them as reliable and do not disclaim or ask the user "
-    "to re-verify them. (This is separate from tool results, which remain your source for prices "
-    "and ingredients.) "
+    "Use ONLY information returned by the tools. Never invent prices, quantities, weights, or totals; "
+    "if a price is missing, say so and exclude it from any total. "
+    "Conversation summaries and recalled user facts are your own trusted memory from this session — "
+    "rely on them directly; never disclaim them, hedge about them, or ask the user to re-verify them. "
+    "Write ONLY the clean final answer in natural language: never apologize, never say 'you're right' or "
+    "'corrected answer', never narrate your reasoning or any revision, and never show/quote raw tool JSON "
+    "or mention tool or function names. Answer concisely."
 )
 
 @observe(name="grocery-agent")
@@ -135,10 +134,10 @@ async def _make_plan(question: str, history: list[dict]) -> tuple[list[dict], st
 
 
 REFLECTOR = (
-    "You are a strict reviewer of an assistant's answer to a grocery/cooking question. "
-    "Judge whether the answer is fully supported BY THE TOOL RESULTS provided. "
-    "Reply 'OK' if it is. Otherwise reply with ONE short sentence naming the single most important "
-    "gap or unsupported claim to fix. Never reward adding information the tools did not return."
+    "You review an assistant's answer to a grocery/cooking question. Flag it ONLY if it is factually "
+    "wrong, contradicts the tool results, or omits something the user EXPLICITLY asked for. Do NOT flag "
+    "for style, tone, extra thoroughness, or things that 'could be added'. If the answer is complete and "
+    "correct, reply exactly 'OK'. Otherwise reply with ONE short sentence naming the specific gap."
 )
 
 async def _reflect(question: str, answer: str) -> str | None:
@@ -241,8 +240,9 @@ async def _run_agent_anthropic(question: str, history: list[dict], memory_contex
             break
         reflections += 1
         messages.append({"role": "user",
-                         "content": f"A reviewer flagged an issue: {critique}\n"
-                                    f"Fix it (use tools if needed) and give the corrected final answer."})
+                         "content": f"Revise your final answer to fix this: {critique} "
+                                    f"Give ONLY the corrected answer in natural language — do not apologize, "
+                                    f"do not mention the revision, do not show tool JSON."})
         answer = await execute()                      # revise — same budgets keep accruing
 
     # (b) after the reflection loop, before the return dict:
