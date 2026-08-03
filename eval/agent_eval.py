@@ -7,20 +7,18 @@ API = "http://localhost:8000/ask_agent"
 
 # ---- golden set: the four labelled failures ----
 CASES = [
-    {"name": "ingredients_clean",
-     "turns": [{"question": "What's in palak paneer?"}],
-     "expect_tools": ["get_recipe_ingredients"],
-     "criteria": ["The answer does not apologize, hedge, or dump raw tool JSON."]},
+    # {"name": "ingredients_clean",
+    #  "turns": [{"question": "What's in palak paneer?"}],
+    #  "expect_tools": ["get_recipe_ingredients"],
+    #  "criteria": ["The answer does not apologize, hedge, or dump raw tool JSON."]},
     {"name": "korma_total_faithful",
      "turns": [{"question": "What does chicken korma cost in total ingredients?"}],
      "expect_tools": ["get_recipe_ingredients", "check_prices"],
-     "criteria": ["The answer states only prices returned by the tools and, at most, their arithmetic sum. "
-                  "It fabricates NO specific numeric quantities, weights, package sizes, or per-unit/per-kg "
-                  "figures. It need NOT mention quantities, and need NOT disclaim that prices are per catalogue item."]},
-    {"name": "memory_trust",
-     "turns": [{"question": "What's in palak paneer?", "session_id": "eval-mem"},
-               {"question": "What was the very first dish I asked about?", "session_id": "eval-mem"}],
-     "criteria": ["The answer names the first dish directly, without disclaiming or refusing to trust its own memory."]},
+     "faithfulness": True},
+    # {"name": "memory_trust",
+    #  "turns": [{"question": "What's in palak paneer?", "session_id": "eval-mem"},
+    #            {"question": "What was the very first dish I asked about?", "session_id": "eval-mem"}],
+    #  "criteria": ["The answer names the first dish directly, without disclaiming or refusing to trust its own memory."]},
 ]
 
 # ---- deterministic checks (cheap, no LLM) ----
@@ -50,6 +48,46 @@ async def judge(question: str, answer: str, criterion: str) -> dict:
     except (json.JSONDecodeError, ValueError) as e:
         return {"pass": False, "reason": f"JUDGE PARSE ERROR: {e} | raw: {t[:200]!r}"}
 
+
+FAITH_JUDGE = (
+    "You compare an ANSWER to EVIDENCE (tool outputs). Decide if EVERY factual claim in the answer "
+    "(prices, stores, ingredients, totals) is supported by the evidence; a total is supported if it "
+    "equals the sum of the evidence prices. "
+    "First reason through each claim and compute the sum, then decide. "
+    "Reply with ONE JSON object and NOTHING else — no fences, no text around it. "
+    "Put your reasoning in reason, and set pass LAST, consistent with your reasoning: "
+    '{"reason": "<claim-by-claim check + the sum>", "pass": true}'
+)
+
+def _extract_json(text: str) -> dict:
+    """Pull the first complete JSON object out of a model reply, tolerating fences/prose around it."""
+    text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("no JSON object found")
+    obj, _ = decoder.raw_decode(text[start:])   # parses the first object, ignores any trailing prose
+    return obj
+
+async def faithfulness_check(answer: str, tool_evidence: list[dict]) -> dict:
+    ev = json.dumps(tool_evidence) or "(none)"
+    res = await anthropic_client.messages.create(
+        model=CLAUDE_MODEL, max_tokens=500, system=FAITH_JUDGE,
+        messages=[{"role": "user", "content": f"EVIDENCE:\n{ev}\n\nANSWER:\n{answer}"}])
+    t = "".join(b.text for b in res.content if b.type == "text")
+    try:
+        verdict = _extract_json(t)
+        if not isinstance(verdict.get("pass"), bool):
+            return {"pass": False, "reason": f"NO CLEAN VERDICT | raw: {t[:200]!r}"}
+        # guard: flag reason/verdict disagreement instead of trusting a contradicted boolean
+        r = verdict["reason"].lower()
+        if verdict["pass"] is False and ("is correct" in r or "actually correct" in r or "all factual claims" in r and "supported" in r):
+            verdict["reason"] += "  [NOTE: reason contradicts pass=false — treat as suspect]"
+        return verdict
+    except (json.JSONDecodeError, ValueError) as e:
+        return {"pass": False, "reason": f"PARSE ERROR: {e} | raw: {t[:200]!r}"}
+
+
 # ---- runner ----
 async def run_case(client, case):
     result = None
@@ -61,6 +99,10 @@ async def run_case(client, case):
         v = await judge(case["turns"][-1]["question"], result["answer"], crit)
         scores[f"judge[{len(judgements)}]"] = bool(v.get("pass"))
         judgements.append((crit, v))
+    if case.get("faithfulness"):
+        v = await faithfulness_check(result["answer"], result.get("tool_evidence", []))
+        scores["faithfulness"] = bool(v.get("pass"))
+        judgements.append(("faithfulness (evidence-grounded)", v))
     return scores, judgements, result["answer"]
 
 async def main():

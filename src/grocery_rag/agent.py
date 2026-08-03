@@ -167,6 +167,7 @@ async def _run_agent_anthropic(question: str, history: list[dict], memory_contex
     )
     messages = history + [{"role": "user", "content": question}]
     tools_used: list[str] = []
+    tool_evidence: list[dict] = [] 
     steps = 0
     tool_calls = 0
     stopped_on = "completed"
@@ -221,6 +222,7 @@ async def _run_agent_anthropic(question: str, history: list[dict], memory_contex
                 tools_used.append(block.name)
                 try:
                     result = await TOOL_FUNCTIONS[block.name](**block.input)
+                    tool_evidence.append({"tool": block.name, "result": result})   # ← record real evidence
                     content, is_error = json.dumps(result), False
                 except Exception as e:
                     content, is_error = f"Tool '{block.name}' failed: {e}", True
@@ -265,6 +267,7 @@ async def _run_agent_anthropic(question: str, history: list[dict], memory_contex
         "tool_plan": plan_text,
         "plan_adherence": plan_adherence,                  # (c) new key
         "tools_used": tools_used,
+        "tool_evidence": tool_evidence,
         "steps": steps, "tool_calls": tool_calls,
         "stopped_on": stopped_on, "reflections": reflections,
     }

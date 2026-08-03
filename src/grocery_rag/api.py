@@ -40,6 +40,7 @@ class AgentResponse(BaseModel):
     answer: str
     tool_plan: str | None = None
     tools_used: list[str] = []
+    tool_evidence: list[dict] = []
     steps: int = 0
     tool_calls: int = 0
     stopped_on: str = "completed"   # "completed" | "step_budget" | "tool_budget"
