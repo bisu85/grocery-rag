@@ -17,12 +17,13 @@ from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 from langchain_anthropic import ChatAnthropic
 from langchain_core.tools import StructuredTool
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.errors import GraphRecursionError
+from langgraph.types import interrupt, Command #for Governance
 
 from grocery_rag.config import CLAUDE_MODEL, MAX_REFLECTIONS
 from grocery_rag.agent import SYSTEM, PLANNER, _reflect              # reuse prompts + critic
@@ -31,6 +32,7 @@ from grocery_rag.tools import (
     get_recipe_ingredients as _recipe,
     search_products as _search,
     check_prices as _prices,
+    place_order as _order
 )
 
 # ---- tools: wrap the EXISTING functions as LangChain tools (same logic, LC interface) ----
@@ -41,6 +43,8 @@ LC_TOOLS = [
         description="Search the grocery catalogue for products matching a query."),
     StructuredTool.from_function(coroutine=_prices, name="check_prices",
         description="Get current prices and stores for one or more products (pass a list)."),
+    StructuredTool.from_function(coroutine=_order, name="place_order",
+        description="Place a grocery order for a list of items. A real, consequential action."),
 ]
 
 _llm_tools = ChatAnthropic(model=CLAUDE_MODEL, max_tokens=1024).bind_tools(LC_TOOLS)
@@ -116,11 +120,32 @@ async def remember_node(state: AgentState) -> dict:                  # long-term
             await remember_facts(uid, facts)
     return {}
 
+# the governance gate
+SENSITIVE_TOOLS = {"place_order"}
+
+def review_node(state: AgentState):
+    calls = state["messages"][-1].tool_calls or []
+    if not any(c["name"] in SENSITIVE_TOOLS for c in calls):
+        return Command(goto="tools")                       # nothing sensitive → just run tools
+    decision = interrupt({                                 # PAUSE — surface to the human, wait
+        "type": "approval_required",
+        "pending": [{"name": c["name"], "args": c["args"]}
+                    for c in calls if c["name"] in SENSITIVE_TOOLS],
+    })
+    if str(decision).lower() in ("approve", "yes", "y"):
+        return Command(goto="tools")                       # approved → execute
+    rejections = [ToolMessage(                             # rejected → answer every call, go back
+        content="Human reviewer REJECTED this action; it was NOT performed. "
+                "Tell the user it was cancelled; do not retry.",
+        tool_call_id=c["id"]) for c in calls]
+    return Command(goto="agent", update={"messages": rejections})
+
 
 # ---- routers (the loop + reflection, expressed declaratively) ----
 def route_after_agent(state: AgentState) -> str:
     last = state["messages"][-1]
-    return "tools" if getattr(last, "tool_calls", None) else "reflect"
+    #return "tools" if getattr(last, "tool_calls", None) else "reflect"
+    return "review" if getattr(last, "tool_calls", None) else "reflect" # routing: send tool calls through review first
 
 def route_after_reflect(state: AgentState) -> str:
     return "agent" if state.get("needs_revision") else "remember"
@@ -134,11 +159,12 @@ _g.add_node("agent", agent_node)
 _g.add_node("tools", ToolNode(LC_TOOLS))
 _g.add_node("reflect", reflect_node)
 _g.add_node("remember", remember_node)
+_g.add_node("review", review_node)
 
 _g.add_edge(START, "recall")
 _g.add_edge("recall", "plan")
 _g.add_edge("plan", "agent")
-_g.add_conditional_edges("agent", route_after_agent, {"tools": "tools", "reflect": "reflect"})
+_g.add_conditional_edges("agent", route_after_agent, {"review": "review", "reflect": "reflect"})
 _g.add_edge("tools", "agent")
 _g.add_conditional_edges("reflect", route_after_reflect, {"agent": "agent", "remember": "remember"})
 _g.add_edge("remember", END)
@@ -160,6 +186,10 @@ async def run_agent_lg(question: str, session_id: str | None = None,
     except GraphRecursionError:
         return {"answer": "(stopped: recursion/step budget reached)",
                 "tool_plan": None, "tools_used": [], "stopped_on": "step_budget"}
+
+    if isinstance(state, dict) and state.get("__interrupt__"):
+        return {"answer": "(paused for human approval — use /order + /approve)",
+                "tool_plan": state.get("plan"), "tools_used": []}
 
     msgs = state["messages"]
     tools_used = [tc["name"] for m in msgs if isinstance(m, AIMessage) for tc in (m.tool_calls or [])]

@@ -12,6 +12,10 @@ from grocery_rag.memory import build_context, append_turn
 
 from grocery_rag.agent_lg import run_agent_lg
 
+from langgraph.types import Command
+from langchain_core.messages import HumanMessage
+from grocery_rag.agent_lg import lg_agent, _text
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
@@ -49,6 +53,15 @@ class AgentResponse(BaseModel):
     facts_recalled: list[str] = []
     facts_saved: list[str] = []
 
+class OrderReq(BaseModel):
+    question: str
+    session_id: str
+
+class ApproveReq(BaseModel):
+    session_id: str
+    decision: str            # "approve" | "reject"
+
+
 
 @app.get("/")
 async def root() -> dict:
@@ -81,3 +94,23 @@ async def ask_agent(req: AskRequest) -> AgentResponse:
 @app.post("/ask_lg", response_model=AgentResponse)
 async def ask_lg(req: AskRequest) -> AgentResponse:
     return AgentResponse(**await run_agent_lg(req.question, req.session_id, req.user_id))
+
+
+@app.post("/order")
+async def order(req: OrderReq) -> dict:
+    config = {"configurable": {"thread_id": req.session_id}}
+    result = await lg_agent.ainvoke(
+        {"messages": [HumanMessage(content=req.question)], "question": req.question,
+         "user_id": None, "reflections": 0}, config=config)
+    if result.get("__interrupt__"):
+        return {"status": "pending_approval", "session_id": req.session_id,
+                "review": result["__interrupt__"][0].value}
+    return {"status": "completed", "answer": _text(result["messages"][-1])}
+
+@app.post("/approve")
+async def approve(req: ApproveReq) -> dict:
+    config = {"configurable": {"thread_id": req.session_id}}
+    result = await lg_agent.ainvoke(Command(resume=req.decision), config=config)
+    if result.get("__interrupt__"):
+        return {"status": "pending_approval", "review": result["__interrupt__"][0].value}
+    return {"status": "completed", "answer": _text(result["messages"][-1])}

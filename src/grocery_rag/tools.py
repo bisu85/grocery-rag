@@ -1,6 +1,13 @@
 from grocery_rag.retrieval import retrieve
 from langfuse import observe
 
+PLACED_ORDERS: list[dict] = []   # in-memory stand-in for a real checkout API
+
+async def place_order(items: list[str]) -> dict:
+    order = {"order_id": len(PLACED_ORDERS) + 1, "items": items, "status": "placed"}
+    PLACED_ORDERS.append(order)   # the real, irreversible side effect
+    return order
+
 # ---- tool backends (synthetic stand-ins; swap for real sources later) ----
 RECIPE_DB = {
     "palak paneer": ["spinach", "paneer", "onion", "garlic", "ginger",
