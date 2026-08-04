@@ -171,7 +171,13 @@ _g.add_edge("remember", END)
 
 # checkpointer = short-term memory (thread_id = session_id). MemorySaver = in-RAM (lost on restart);
 # swap for langgraph.checkpoint.sqlite.SqliteSaver to match your durable SQLite store.
-lg_agent = _g.compile(checkpointer=MemorySaver())
+builder = _g                                            # expose the uncompiled builder
+lg_agent = _g.compile(checkpointer=MemorySaver())       # default; overridden at startup for durability
+
+def use_checkpointer(saver) -> None:
+    """Recompile the module-level graph with a durable checkpointer (called from the app lifespan)."""
+    global lg_agent
+    lg_agent = builder.compile(checkpointer=saver)
 
 
 # ---- convenience wrapper for the API ----

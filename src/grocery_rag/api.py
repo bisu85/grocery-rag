@@ -10,16 +10,21 @@ from contextlib import asynccontextmanager
 from grocery_rag.clients import langfuse
 from grocery_rag.memory import build_context, append_turn
 
-from grocery_rag.agent_lg import run_agent_lg
+from grocery_rag import agent_lg           # import the MODULE, so we see the swapped graph
+from grocery_rag.agent_lg import run_agent_lg, lg_agent, _text
 
 from langgraph.types import Command
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import HumanMessage
-from grocery_rag.agent_lg import lg_agent, _text
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    langfuse.shutdown()
+    async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as saver:
+        await saver.setup()                 # create tables if absent (idempotent)
+        agent_lg.use_checkpointer(saver)    # graph now persists to disk
+        yield
+        langfuse.shutdown()                 
 
 app = FastAPI(title="Grocery RAG Assistant", lifespan=lifespan)
 
@@ -99,7 +104,7 @@ async def ask_lg(req: AskRequest) -> AgentResponse:
 @app.post("/order")
 async def order(req: OrderReq) -> dict:
     config = {"configurable": {"thread_id": req.session_id}}
-    result = await lg_agent.ainvoke(
+    result = await agent_lg.lg_agent.ainvoke(
         {"messages": [HumanMessage(content=req.question)], "question": req.question,
          "user_id": None, "reflections": 0}, config=config)
     if result.get("__interrupt__"):
@@ -110,7 +115,7 @@ async def order(req: OrderReq) -> dict:
 @app.post("/approve")
 async def approve(req: ApproveReq) -> dict:
     config = {"configurable": {"thread_id": req.session_id}}
-    result = await lg_agent.ainvoke(Command(resume=req.decision), config=config)
+    result = await agent_lg.lg_agent.ainvoke(Command(resume=req.decision), config=config)
     if result.get("__interrupt__"):
         return {"status": "pending_approval", "review": result["__interrupt__"][0].value}
     return {"status": "completed", "answer": _text(result["messages"][-1])}

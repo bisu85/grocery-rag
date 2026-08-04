@@ -21,3 +21,5 @@ qdrant_snapshots/
 .DS_Store
 
 sessions.db
+
+checkpoints.sqlite*
