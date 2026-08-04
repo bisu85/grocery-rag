@@ -4,6 +4,7 @@ from grocery_rag.clients import anthropic_client
 from grocery_rag.config import CLAUDE_MODEL
 
 API = "http://localhost:8000/ask_agent"
+#API = "http://localhost:8000/ask_lg"
 
 # ---- golden set: the four labelled failures ----
 CASES = [
