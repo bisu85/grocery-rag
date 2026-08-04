@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from grocery_rag.clients import langfuse
 from grocery_rag.memory import build_context, append_turn
 
+from grocery_rag.agent_lg import run_agent_lg
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -76,3 +77,7 @@ async def ask_agent(req: AskRequest) -> AgentResponse:
     if req.session_id:
         await append_turn(req.session_id, req.question, result["answer"])
     return AgentResponse(**result)
+
+@app.post("/ask_lg", response_model=AgentResponse)
+async def ask_lg(req: AskRequest) -> AgentResponse:
+    return AgentResponse(**await run_agent_lg(req.question, req.session_id, req.user_id))
