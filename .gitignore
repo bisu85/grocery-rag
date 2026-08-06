@@ -23,3 +23,5 @@ qdrant_snapshots/
 sessions.db
 
 checkpoints.sqlite*
+
+.langgraph_api/

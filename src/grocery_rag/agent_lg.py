@@ -169,10 +169,11 @@ _g.add_edge("tools", "agent")
 _g.add_conditional_edges("reflect", route_after_reflect, {"agent": "agent", "remember": "remember"})
 _g.add_edge("remember", END)
 
-# checkpointer = short-term memory (thread_id = session_id). MemorySaver = in-RAM (lost on restart);
-# swap for langgraph.checkpoint.sqlite.SqliteSaver to match your durable SQLite store.
 builder = _g                                            # expose the uncompiled builder
-lg_agent = _g.compile(checkpointer=MemorySaver())       # default; overridden at startup for durability
+studio_agent = builder.compile()                        # no checkpointer — LangGraph Studio/platform injects persistence
+# short-term memory via checkpointer (thread_id = session_id). MemorySaver = in-RAM;
+# lifespan swaps in AsyncSqliteSaver for durability.
+lg_agent = _g.compile(checkpointer=MemorySaver())
 
 def use_checkpointer(saver) -> None:
     """Recompile the module-level graph with a durable checkpointer (called from the app lifespan)."""

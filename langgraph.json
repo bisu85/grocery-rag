@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "single": "./src/grocery_rag/agent_lg.py:studio_agent",
+    "multi": "./src/grocery_rag/multiagent_lg.py:multiagent"
+  },
+  "env": ".env"
+}
