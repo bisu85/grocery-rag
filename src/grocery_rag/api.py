@@ -12,6 +12,7 @@ from grocery_rag.memory import build_context, append_turn
 
 from grocery_rag import agent_lg           # import the MODULE, so we see the swapped graph
 from grocery_rag.agent_lg import run_agent_lg, lg_agent, _text
+from grocery_rag.multiagent_lg import run_multiagent
 
 from langgraph.types import Command
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -119,3 +120,7 @@ async def approve(req: ApproveReq) -> dict:
     if result.get("__interrupt__"):
         return {"status": "pending_approval", "review": result["__interrupt__"][0].value}
     return {"status": "completed", "answer": _text(result["messages"][-1])}
+
+@app.post("/ask_ma", response_model=AgentResponse)
+async def ask_ma(req: AskRequest) -> AgentResponse:
+    return AgentResponse(**await run_multiagent(req.question))
